@@ -3,6 +3,8 @@
 Omarchy plugin that magnifies the cursor when you shake the mouse, like
 macOS.
 
+> Changes from the  original: remove limits on configuration parameters (magnification, delay, etc.); disable growing the cursor further when shaking is continued.
+
 ![Shake to find settings](preview.png)
 
 It ships a shake-only Hyprland plugin vendored from
