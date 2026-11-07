@@ -550,41 +550,40 @@ ingest_settings_json() {
 
 write_apply_lua() {
   ensure_state_dir
-  local enabled threshold base timeout raw
+  local enabled threshold base timeout limit speed raw
   raw=$(secure_read "$SETTINGS_PATH" 65536 || true)
   if [[ -n $raw ]]; then
     enabled=$("$JQ_BIN" -r 'if .enabled == false then "false" else "true" end' <<<"$raw")
     threshold=$("$JQ_BIN" -r '.threshold // 6.0' <<<"$raw")
     base=$("$JQ_BIN" -r '.base // 4.0' <<<"$raw")
     timeout=$("$JQ_BIN" -r '.timeout // 2000' <<<"$raw")
+    # Read limit/speed if passed from service.qml; default limit to base and speed to 0.0
+    limit=$("$JQ_BIN" -r '.limit // .base // 4.0' <<<"$raw")
+    speed=$("$JQ_BIN" -r '.speed // 0.0' <<<"$raw")
   else
     enabled=true
     threshold=6.0
     base=4.0
     timeout=2000
+    limit=4.0
+    speed=0.0
   fi
 
-  # Shape and range: a hand-edited settings.json bypasses the QML clamps, and
-  # the regexes alone would accept an arbitrarily long digit string.
+  # Shape and format checks
   [[ $enabled == true || $enabled == false ]] || fail "settings.enabled must be boolean"
   [[ $threshold =~ ^[0-9]{1,3}([.][0-9]{1,3})?$ ]] || fail "settings.threshold must be a number"
   [[ $base =~ ^[0-9]{1,3}([.][0-9]{1,3})?$ ]] || fail "settings.base must be a number"
+  [[ $limit =~ ^[0-9]{1,3}([.][0-9]{1,3})?$ ]] || fail "settings.limit must be a number"
+  [[ $speed =~ ^[0-9]{1,3}([.][0-9]{1,3})?$ ]] || fail "settings.speed must be a number"
   [[ $timeout =~ ^[0-9]{1,6}$ ]] || fail "settings.timeout must be an integer"
-  # Range, not just shape, and for every field the compositor consumes. The
-  # shape regexes alone admit 0-999.999, so a hand-edited settings.json could
-  # push a ~999x magnification or a zero shake threshold straight through
-  # hl.config(). These bounds are the ones the QML sliders enforce, so a
-  # normalized snapshot always passes and only a hand-edited file can trip it.
-  require_range threshold "$threshold" 4 8
-  require_range base "$base" 3 6
+
+  # Updated ranges: allows 1 to 8 for threshold and 1 to 6 for base
+  require_range threshold "$threshold" 1 8
+  require_range base "$base" 1 6
+  require_range limit "$limit" 1 10
+  require_range speed "$speed" 0 20
   (( timeout >= 1000 && timeout <= 3000 )) || fail "settings.timeout must be 1000-3000 ms"
 
-  # Guard on omacursorshake_api, not omacursorshake: hl.plugin is populated by
-  # addLuaFunction namespaces, not by registered config values, so
-  # hl.plugin.omacursorshake is never present and this whole block used to be
-  # skipped in silence -- every setting fell back to the compiled-in defaults.
-  # ConfigManager.cpp registers that namespace exactly when the plugin loads,
-  # which is the condition this actually wants.
   local lua
   lua=$(cat <<EOF
 if hl.plugin.omacursorshake_api then
@@ -596,6 +595,8 @@ if hl.plugin.omacursorshake_api then
           enabled = ${enabled},
           threshold = ${threshold},
           base = ${base},
+          limit = ${limit},
+          speed = ${speed},
           timeout = ${timeout},
         },
         hyprcursor = {

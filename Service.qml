@@ -3,13 +3,6 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Hyprland
 
-// Headless owner of the vendored shake-only Hyprland plugin. Loaded with the
-// shell, independent of the bar widget, so shake-to-find keeps working with
-// the panel closed.
-//
-// Nothing here writes ~/.config/hypr/: the compositor plugin is built from
-// native/ into the state dir, loaded with hyprctl, and re-applied after
-// Hyprland config reloads.
 Item {
   id: root
 
@@ -28,21 +21,12 @@ Item {
   readonly property string settingsPath: stateDir + "/settings.json"
   readonly property string stateio: pluginDir + "bin/stateio.py"
 
-  // Absolute interpreters, never resolved through PATH. Whatever this shell
-  // inherited could otherwise decide which `bash` and `python3` run, and this
-  // backend compiles the .so that Hyprland dlopens.
   readonly property string bashPath: "/usr/bin/bash"
   readonly property string pythonPath: "/usr/bin/python3"
   readonly property string notifyPath: "/usr/share/omarchy/bin/omarchy-notification-send"
   readonly property string trustedPath: "/usr/bin:/bin"
   readonly property string notifySearchPath: "/usr/share/omarchy/bin:/usr/bin:/bin"
 
-  // The only names a child may inherit. Everything else is dropped by
-  // clearEnvironment and never reinstated -- PATH itself, BASH_ENV, PYTHONPATH,
-  // LD_PRELOAD, CC/CXX/CXXFLAGS/LDFLAGS/EXTRA_CXXFLAGS, PKG_CONFIG_PATH,
-  // LOCPATH -- so nothing inherited can steer the build or the load. The
-  // cursor-theme names survive because the backend already allowlists their
-  // values before they reach hyprctl.
   readonly property var passThroughEnv: [
     "HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "HYPRLAND_INSTANCE_SIGNATURE",
     "DBUS_SESSION_BUS_ADDRESS", "LANG",
@@ -67,6 +51,8 @@ Item {
     enabled: true,
     threshold: 6.0,
     base: 4.0,
+    limit: 4.0,
+    speed: 0.0,
     timeout: 2000
   })
 
@@ -74,7 +60,7 @@ Item {
   property bool settingsReady: false
   property bool started: false
 
-  property string phase: "starting"   // starting|building|loading|ready|disabled|unsupported|error
+  property string phase: "starting"
   property string statusText: "Starting…"
   property string lastError: ""
   property bool loaded: false
@@ -98,9 +84,6 @@ Item {
   property string generation: ""
   property double lastApplyAt: 0
   readonly property int diagnosticMaxChars: 480
-  // Longest legitimate job is a full native build (MAKE_TIMEOUT 300s).
-  // Anything past this margin means a child escaped its timeout, and the
-  // queue must not stay wedged forever.
   readonly property int jobWatchdogMs: 900000
   property bool jobTimedOut: false
 
@@ -120,10 +103,13 @@ Item {
 
   function normalizeSettings(parsed) {
     var src = parsed && typeof parsed === "object" ? parsed : {}
+    var baseVal = snap(src.base, 4, 1, 6, 1) // Fixed min: 1 (was 3)
     return {
       enabled: src.enabled !== false,
-      threshold: snap(src.threshold, 6, 4, 8, 1),
-      base: snap(src.base, 4, 3, 6, 1),
+      threshold: snap(src.threshold, 6, 1, 8, 1), // Fixed min: 1 (was 4)
+      base: baseVal,
+      limit: src.limit !== undefined ? snap(src.limit, baseVal, 1, 10, 0.5) : baseVal,
+      speed: src.speed !== undefined ? Number(src.speed) : 0.0,
       timeout: Math.round(snap(src.timeout, 2000, 1000, 3000, 500))
     }
   }
@@ -144,13 +130,14 @@ Item {
   function updateSettings(patch) {
     var merged = normalizeSettings(settings)
     for (var key in patch) {
-      if (key === "enabled" || key === "threshold" || key === "base" || key === "timeout")
+      if (key === "enabled" || key === "threshold" || key === "base" || key === "limit" || key === "speed" || key === "timeout")
         merged[key] = patch[key]
     }
+    // Keep ceiling locked to base unless an explicit custom limit is specified
+    if (patch.base !== undefined && patch.limit === undefined) {
+      merged.limit = merged.base
+    }
     settings = normalizeSettings(merged)
-    // The queued job carries the JSON and persists it backend-side. Writing
-    // it here too would race that job for settings.json and could also land
-    // out of order, leaving the file disagreeing with the compositor.
     if (settings.enabled) enqueue("apply")
     else enqueue("disable")
   }
@@ -259,16 +246,12 @@ Item {
     repeat: false
     onTriggered: {
       root.jobTimedOut = true
-      // Terminates the child; onExited then runs the normal failure path.
       job.running = false
     }
   }
 
   Process {
     id: job
-    // -p (privileged mode) on top of the cleared environment: bash then also
-    // ignores BASH_ENV and ENV and refuses exported functions, which matters
-    // for anyone running backend.sh by hand from a dirty shell.
     clearEnvironment: true
     environment: root.backendEnv
     stdout: StdioCollector { id: jobOut; waitForEnd: true }
@@ -327,8 +310,6 @@ Item {
 
   Process {
     id: settingsReader
-    // -I keeps python out of PYTHONPATH/PYTHONHOME and off the script
-    // directory's sys.path; stateio.py imports nothing but the stdlib.
     command: [root.pythonPath, "-I", root.stateio, "read", root.settingsPath, "65536"]
     clearEnvironment: true
     environment: ({ "PATH": root.trustedPath })
@@ -356,8 +337,6 @@ Item {
     interval: 80
     onTriggered: {
       if (job.running || root.queue.length > 0) return
-      // hl.config() from apply fires configreloaded; ignore that echo or we
-      // stay busy forever and the toggle cannot be clicked.
       if (Date.now() - root.lastApplyAt < 1500) return
       if (root.settings.enabled) root.enqueue("apply")
     }

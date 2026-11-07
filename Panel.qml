@@ -2,8 +2,6 @@ import QtQuick
 import qs.Commons
 import qs.Ui
 
-// Bar button plus settings popup. The compositor plugin itself lives in
-// Service.qml so shake-to-find keeps working while this panel is closed.
 Panel {
   id: root
   moduleName: "io.github.thinklinux.omacursorshake"
@@ -16,6 +14,17 @@ Panel {
   readonly property var currentSettings: serviceReady ? shakeService.settings : ({
     enabled: true, threshold: 6.0, base: 4.0, timeout: 2000
   })
+
+  // Optimistic local state to prevent slider snap-back
+  property real localThreshold: currentSettings ? Number(currentSettings.threshold) : 6.0
+  property real localBase: currentSettings ? Number(currentSettings.base) : 4.0
+  property real localTimeout: currentSettings ? Number(currentSettings.timeout) : 2000
+
+  onCurrentSettingsChanged: {
+    if (!sensSlider.dragging) localThreshold = Number(currentSettings.threshold)
+    if (!magSlider.dragging) localBase = Number(currentSettings.base)
+    if (!holdSlider.dragging) localTimeout = Number(currentSettings.timeout)
+  }
 
   property var anchorItem: null
   property var hostWidget: null
@@ -169,7 +178,7 @@ Panel {
 
             Text {
               id: sensValue
-              text: Number(root.currentSettings.threshold).toFixed(0)
+              text: Number(root.localThreshold).toFixed(0)
               textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
@@ -184,13 +193,17 @@ Panel {
             id: sensSlider
             bar: root.bar
             width: parent.width
-            minimum: 4
+            minimum: 1
             maximum: 8
             step: 1
             integer: true
-            tickCount: 5
-            value: Number(root.currentSettings.threshold)
-            onReleased: function(v) { root.setThreshold(v) }
+            tickCount: 8
+            value: root.localThreshold
+            onMoved: function(v) { root.localThreshold = v }
+            onReleased: function(v) {
+              root.localThreshold = v
+              root.setThreshold(v)
+            }
           }
         }
 
@@ -215,7 +228,7 @@ Panel {
 
             Text {
               id: magValue
-              text: Number(root.currentSettings.base).toFixed(0) + "×"
+              text: Number(root.localBase).toFixed(0) + "×"
               textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
@@ -230,13 +243,17 @@ Panel {
             id: magSlider
             bar: root.bar
             width: parent.width
-            minimum: 3
+            minimum: 1
             maximum: 6
             step: 1
             integer: true
-            tickCount: 4
-            value: Number(root.currentSettings.base)
-            onReleased: function(v) { root.setBase(v) }
+            tickCount: 6
+            value: root.localBase
+            onMoved: function(v) { root.localBase = v }
+            onReleased: function(v) {
+              root.localBase = v
+              root.setBase(v)
+            }
           }
         }
 
@@ -261,7 +278,7 @@ Panel {
 
             Text {
               id: holdValue
-              text: (Number(root.currentSettings.timeout) / 1000).toFixed(1) + "s"
+              text: (Number(root.localTimeout) / 1000).toFixed(1) + "s"
               textFormat: Text.PlainText
               color: root.dim
               font.family: root.fontFamily
@@ -281,8 +298,12 @@ Panel {
             step: 500
             integer: true
             tickCount: 5
-            value: Number(root.currentSettings.timeout)
-            onReleased: function(v) { root.setTimeoutMs(v) }
+            value: root.localTimeout
+            onMoved: function(v) { root.localTimeout = v }
+            onReleased: function(v) {
+              root.localTimeout = v
+              root.setTimeoutMs(v)
+            }
           }
         }
 
